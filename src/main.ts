@@ -1,4 +1,4 @@
-import { drawGame, layoutPlayfield } from "./draw";
+import { drawGame, layoutPlayfield, type Layout } from "./draw";
 import {
   FIELD_H,
   FIELD_W,
@@ -11,6 +11,7 @@ import {
   type Side,
   type Storage,
 } from "./game";
+import { PIXEL_H, PIXEL_W } from "./pixels";
 import { Sfx } from "./sfx";
 
 const canvasNode = document.querySelector("canvas#game");
@@ -68,9 +69,9 @@ class Controls {
 
   private sideOf(event: PointerEvent): Side | null {
     const rect = this.surface.getBoundingClientRect();
-    const layout = layoutPlayfield(rect.width, rect.height);
-    const x = (event.clientX - rect.left - layout.x) / layout.scale;
-    const y = (event.clientY - rect.top - layout.y) / layout.scale;
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const x = ((event.clientX - rect.left) / rect.width) * FIELD_W;
+    const y = ((event.clientY - rect.top) / rect.height) * FIELD_H;
     if (x < 0 || y < 0 || x > FIELD_W || y > FIELD_H) return null;
     return x < SHIBA_X ? "left" : "right";
   }
@@ -129,22 +130,22 @@ function safeTop(): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-function resize(): void {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.max(1, Math.round(window.innerWidth * dpr));
-  canvas.height = Math.max(1, Math.round(window.innerHeight * dpr));
+function resize(): Layout {
+  const layout = layoutPlayfield(window.innerWidth, window.innerHeight);
+  if (canvas.width !== PIXEL_W) canvas.width = PIXEL_W;
+  if (canvas.height !== PIXEL_H) canvas.height = PIXEL_H;
+  canvas.style.width = `${PIXEL_W * layout.scale}px`;
+  canvas.style.height = `${PIXEL_H * layout.scale}px`;
+  canvas.style.left = `${layout.x}px`;
+  canvas.style.top = `${layout.y}px`;
+  return layout;
 }
 
 function render(): void {
-  resize();
-  const dpr = canvas.width / Math.max(1, window.innerWidth);
-  const layout = layoutPlayfield(window.innerWidth, window.innerHeight);
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = "#100c16";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.setTransform(dpr * layout.scale, 0, 0, dpr * layout.scale, dpr * layout.x, dpr * layout.y);
+  const layout = resize();
   ctx.imageSmoothingEnabled = false;
-  drawGame(ctx, state, safeTop() / layout.scale);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  drawGame(ctx, state, Math.round(safeTop() / layout.scale));
 }
 
 let last = performance.now();
