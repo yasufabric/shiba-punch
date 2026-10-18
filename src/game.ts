@@ -377,8 +377,8 @@ function spawnSparks(state: GameState, enemy: Enemy, superHit: boolean): void {
       vy: Math.sin(angle) * speed,
       life: 0.28,
       max: 0.28,
-      color: i % 2 === 0 ? "#ffd15a" : "#fff7ea",
-      size: superHit ? 6 : 4,
+      color: i % 4 === 0 ? "#7a4a00" : i % 4 === 1 ? "#e0a200" : i % 4 === 2 ? "#ffe066" : "#fffbd1",
+      size: (i % 3) + 1,
     });
   }
   if (state.sparks.length > 80) state.sparks.splice(0, state.sparks.length - 80);
