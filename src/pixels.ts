@@ -1,9 +1,46 @@
+import { FIELD_H, FIELD_W } from "./game";
+
+/** Design buffer. 390×844 CSS pixels at 2×. The live buffer follows the viewport. */
 export const PIXEL_W = 195;
 export const PIXEL_H = 422;
 
-/** Map a 390×844 logic coordinate onto the 195×422 pixel grid. */
+let viewW = PIXEL_W;
+let viewH = PIXEL_H;
+
+export function viewWidth(): number {
+  return viewW;
+}
+
+export function viewHeight(): number {
+  return viewH;
+}
+
+export function setViewSize(width: number, height: number): void {
+  viewW = Math.max(1, Math.round(width));
+  viewH = Math.max(1, Math.round(height));
+}
+
+/** Map a 390×844 logic coordinate onto the 195×422 design grid. */
 export function toPx(logical: number): number {
   return Math.floor(logical / 2);
+}
+
+/** Map a logic coordinate onto the live integer buffer. */
+export function viewX(logical: number): number {
+  return Math.floor((logical * viewW) / FIELD_W);
+}
+
+export function viewY(logical: number): number {
+  return Math.floor((logical * viewH) / FIELD_H);
+}
+
+/** Map a design-grid pixel onto the live buffer. */
+export function spanX(design: number): number {
+  return Math.floor((design * viewW) / PIXEL_W);
+}
+
+export function spanY(design: number): number {
+  return Math.floor((design * viewH) / PIXEL_H);
 }
 
 export interface Sprite {
