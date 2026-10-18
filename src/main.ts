@@ -11,7 +11,7 @@ import {
   type Side,
   type Storage,
 } from "./game";
-import { PIXEL_H, PIXEL_W } from "./pixels";
+import { setViewSize } from "./pixels";
 import { Sfx } from "./sfx";
 
 const canvasNode = document.querySelector("canvas#game");
@@ -124,28 +124,37 @@ class Controls {
 
 const controls = new Controls(canvas, () => sfx.unlock());
 
-function safeTop(): number {
-  const raw = getComputedStyle(document.documentElement).getPropertyValue("--sat");
-  const value = Number.parseFloat(raw);
-  return Number.isFinite(value) ? value : 0;
+function viewportBox(): { width: number; height: number; left: number; top: number } {
+  const viewport = window.visualViewport;
+  if (!viewport) {
+    return { width: window.innerWidth, height: window.innerHeight, left: 0, top: 0 };
+  }
+  return {
+    width: viewport.width,
+    height: viewport.height,
+    left: viewport.offsetLeft,
+    top: viewport.offsetTop,
+  };
 }
 
 function resize(): Layout {
-  const layout = layoutPlayfield(window.innerWidth, window.innerHeight);
-  if (canvas.width !== PIXEL_W) canvas.width = PIXEL_W;
-  if (canvas.height !== PIXEL_H) canvas.height = PIXEL_H;
-  canvas.style.width = `${PIXEL_W * layout.scale}px`;
-  canvas.style.height = `${PIXEL_H * layout.scale}px`;
-  canvas.style.left = `${layout.x}px`;
-  canvas.style.top = `${layout.y}px`;
+  const box = viewportBox();
+  const layout = layoutPlayfield(box.width, box.height);
+  setViewSize(layout.width, layout.height);
+  if (canvas.width !== layout.width) canvas.width = layout.width;
+  if (canvas.height !== layout.height) canvas.height = layout.height;
+  canvas.style.width = `${layout.width * layout.scale}px`;
+  canvas.style.height = `${layout.height * layout.scale}px`;
+  canvas.style.left = `${Math.round(box.left)}px`;
+  canvas.style.top = `${Math.round(box.top)}px`;
   return layout;
 }
 
 function render(): void {
-  const layout = resize();
+  resize();
   ctx.imageSmoothingEnabled = false;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  drawGame(ctx, state, Math.round(safeTop() / layout.scale));
+  drawGame(ctx, state, 0);
 }
 
 let last = performance.now();

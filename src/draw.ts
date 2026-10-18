@@ -10,7 +10,17 @@ import {
   type Side,
 } from "./game";
 import { DANGER, OUTLINE, PALETTE, WHITE, chargeGold } from "./palette";
-import { PIXEL_H, PIXEL_W, flipH, rotateQuarter, toPx, type Sprite } from "./pixels";
+import {
+  flipH,
+  rotateQuarter,
+  spanX,
+  spanY,
+  viewHeight,
+  viewWidth,
+  viewX,
+  viewY,
+  type Sprite,
+} from "./pixels";
 import {
   arm,
   bossCat,
@@ -39,18 +49,23 @@ import {
 
 export interface Layout {
   scale: number;
+  width: number;
+  height: number;
   x: number;
   y: number;
 }
 
+/** Internal pixels = viewport / integer scale, covering the viewport with no margin. */
 export function layoutPlayfield(cssW: number, cssH: number): Layout {
-  const scale = Math.max(1, Math.floor(Math.min(cssW / PIXEL_W, cssH / PIXEL_H)));
-  const viewW = PIXEL_W * scale;
-  const viewH = PIXEL_H * scale;
+  const scale = 2;
+  const viewW = Math.max(scale, Math.round(cssW));
+  const viewH = Math.max(scale, Math.round(cssH));
   return {
     scale,
-    x: Math.floor((cssW - viewW) / 2),
-    y: Math.floor((cssH - viewH) / 2),
+    width: Math.max(1, Math.ceil(viewW / scale)),
+    height: Math.max(1, Math.ceil(viewH / scale)),
+    x: 0,
+    y: 0,
   };
 }
 
@@ -195,19 +210,32 @@ function shakeOf(state: GameState): { x: number; y: number } {
 }
 
 function drawBackground(ctx: CanvasRenderingContext2D, anim: number): void {
-  for (const band of skyBands) fillAt(ctx, 0, band.y, PIXEL_W, band.h, band.color);
-  for (const block of skyline) fillAt(ctx, block.x, block.y, block.w, block.h, block.color);
-  blit(ctx, moon, 14, 16, PLAIN);
+  const width = viewWidth();
+  const height = viewHeight();
+  fillAt(ctx, 0, 0, width, height, 18);
+  for (const band of skyBands) {
+    const y0 = spanY(band.y);
+    const y1 = spanY(band.y + band.h);
+    fillAt(ctx, 0, y0, width, Math.max(0, y1 - y0), band.color);
+  }
+  for (const block of skyline) {
+    const x0 = spanX(block.x);
+    const x1 = spanX(block.x + block.w);
+    const y0 = spanY(block.y);
+    const y1 = spanY(block.y + block.h);
+    fillAt(ctx, x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0), block.color);
+  }
+  blit(ctx, moon, spanX(14), spanY(16), PLAIN);
   const twinkle = Math.floor(anim * 4);
   skyStars.forEach((starBit, index) => {
     const dim = (index + twinkle) % 5 === 0;
     const gold = sparkGolds[(index + twinkle) % sparkGolds.length] ?? 13;
-    fillAt(ctx, starBit.x, starBit.y, starBit.s, starBit.s, dim ? 21 : gold);
+    fillAt(ctx, spanX(starBit.x), spanY(starBit.y), starBit.s, starBit.s, dim ? 21 : gold);
   });
 }
 
 function drawShadowAt(ctx: CanvasRenderingContext2D, picture: Sprite, cx: number): void {
-  const foot = toPx(LANE_Y) + FOOT_DROP;
+  const foot = viewY(LANE_Y) + FOOT_DROP;
   blit(ctx, picture, cx - Math.floor(picture.w / 2), foot - Math.floor(picture.h / 2), PLAIN);
 }
 
@@ -225,9 +253,9 @@ function enemyPicture(enemy: Enemy, anim: number): Sprite {
 function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, state: GameState, shake: { x: number; y: number }): void {
   const telegraph = enemy.phase === "telegraph" && Math.floor(state.anim * 6) % 2 === 0;
   const lunge = telegraph ? (enemy.side === "left" ? 1 : -1) : 0;
-  const cx = toPx(enemy.x) + shake.x + lunge;
-  const cy = toPx(enemy.y) + shake.y;
-  if (enemy.phase !== "blown" || cy > toPx(LANE_Y) - 24) {
+  const cx = viewX(enemy.x) + shake.x + lunge;
+  const cy = viewY(enemy.y) + shake.y;
+  if (enemy.phase !== "blown" || cy > viewY(LANE_Y) - 24) {
     drawShadowAt(ctx, shadowFor(enemy.kind), cx);
   }
   const picture = enemyPicture(enemy, state.anim);
@@ -300,8 +328,8 @@ function drawShiba(ctx: CanvasRenderingContext2D, state: GameState, shake: { x: 
   if (phase === 1) bob -= 1;
   const dir: number = state.punchSide === "left" ? -1 : 1;
   const lean = phase === 1 ? dir : phase === 0 ? -dir : 0;
-  const cx = toPx(SHIBA_X) + shake.x + lean;
-  const cy = toPx(LANE_Y) + shake.y + bob;
+  const cx = viewX(SHIBA_X) + shake.x + lean;
+  const cy = viewY(LANE_Y) + shake.y + bob;
   drawShadowAt(ctx, shadowShiba, cx);
   const at = place(body, cx, cy);
   blit(ctx, body, at.x, at.y, { flash: showShibaFlash(state.hurtT), telegraph: false, gold: null });
@@ -350,14 +378,15 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, inset: number)
   const bossTime = state.phase === "play" && state.time >= WAVE_BOSS_AT;
   if (fillW > 0) fillAt(ctx, barX + 1, barY + 1, fillW, barH - 2, bossTime ? 16 : 13);
 
+  const width = viewWidth();
   const badge = glove;
-  blit(ctx, badge, PIXEL_W - badge.w - 6, top, PLAIN);
+  blit(ctx, badge, width - badge.w - 6, top, PLAIN);
   if (state.wins > 0) {
     const frame = Math.floor(state.anim * 8) % 2;
     const bits = [
-      { x: PIXEL_W - 8, y: top - 2, s: 2 as const },
-      { x: PIXEL_W - badge.w - 8, y: top + 2, s: 1 as const },
-      { x: PIXEL_W - 10, y: top + badge.h - 2, s: 2 as const },
+      { x: width - 8, y: top - 2, s: 2 as const },
+      { x: width - badge.w - 8, y: top + 2, s: 1 as const },
+      { x: width - 10, y: top + badge.h - 2, s: 2 as const },
     ];
     bits.forEach((bit, index) => {
       fillAt(ctx, bit.x, bit.y, bit.s, bit.s, sparkGolds[(index + frame) % sparkGolds.length] ?? 14);
@@ -365,14 +394,14 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, inset: number)
   }
 
   if (state.combo >= 1 && state.phase === "play") {
-    drawDigits(ctx, state.combo, 97, top + pawOn.h + 18, state.beatT > 0.5);
+    drawDigits(ctx, state.combo, Math.floor(viewWidth() / 2), top + pawOn.h + 18, state.beatT > 0.5);
   }
 }
 
 function drawWin(ctx: CanvasRenderingContext2D, state: GameState): void {
   const bob = Math.floor(state.gloveT * 4) % 2 === 0 ? 0 : -2;
-  const cx = 97;
-  const cy = 168 + bob;
+  const cx = Math.floor(viewWidth() / 2);
+  const cy = spanY(168) + bob;
   const frame = Math.floor(state.anim * 8) % 2 === 1 ? 1 : 0;
   const bits: readonly { x: number; y: number; s: 1 | 2 | 3 }[] = [
     { x: 0, y: -26, s: 2 },
@@ -395,10 +424,12 @@ function drawWin(ctx: CanvasRenderingContext2D, state: GameState): void {
 }
 
 function drawFrame(ctx: CanvasRenderingContext2D, index: number): void {
-  fillAt(ctx, 0, 0, PIXEL_W, 2, index);
-  fillAt(ctx, 0, PIXEL_H - 2, PIXEL_W, 2, index);
-  fillAt(ctx, 0, 0, 2, PIXEL_H, index);
-  fillAt(ctx, PIXEL_W - 2, 0, 2, PIXEL_H, index);
+  const width = viewWidth();
+  const height = viewHeight();
+  fillAt(ctx, 0, 0, width, 2, index);
+  fillAt(ctx, 0, height - 2, width, 2, index);
+  fillAt(ctx, 0, 0, 2, height, index);
+  fillAt(ctx, width - 2, 0, 2, height, index);
 }
 
 export function drawGame(ctx: CanvasRenderingContext2D, state: GameState, insetTop: number): void {
@@ -415,24 +446,24 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameState, insetT
   state.sparks.forEach((spark, index) => {
     const size: 1 | 2 | 3 = spark.size >= 3 ? 3 : spark.size === 2 ? 2 : 1;
     const color = sparkGolds[(index + Math.floor(state.anim * 8)) % sparkGolds.length] ?? 13;
-    fillAt(ctx, toPx(spark.x) + shake.x, toPx(spark.y) + shake.y, size, size, color);
+    fillAt(ctx, viewX(spark.x) + shake.x, viewY(spark.y) + shake.y, size, size, color);
   });
 
   if (state.enemies.some((enemy) => enemy.phase === "blown" && enemy.chainArmed)) {
     for (let i = 0; i < 6; i++) {
-      const x = i % 2 === 0 ? 6 : PIXEL_W - dash.w - 6;
-      blit(ctx, dash, x, 210 + i * 16, PLAIN);
+      const x = i % 2 === 0 ? 6 : viewWidth() - dash.w - 6;
+      blit(ctx, dash, x, spanY(210 + i * 16), PLAIN);
     }
   }
 
   if (state.intro) {
     const hint = finger[Math.floor(state.anim * 4) % 2] ?? finger[0];
-    if (hint) blit(ctx, hint, 148 + shake.x, 312 + shake.y, PLAIN);
+    if (hint) blit(ctx, hint, spanX(148) + shake.x, spanY(312) + shake.y, PLAIN);
   }
 
   for (const floater of state.floaters) {
     const pop = floater.life > floater.maxLife - 0.12;
-    drawDigits(ctx, floater.value, toPx(floater.x) + shake.x, toPx(floater.y) + shake.y, pop);
+    drawDigits(ctx, floater.value, viewX(floater.x) + shake.x, viewY(floater.y) + shake.y, pop);
   }
 
   if (state.flashT > 0) drawFrame(ctx, WHITE);

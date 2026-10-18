@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import drawSource from "./draw.ts?raw";
 import { layoutPlayfield } from "./draw";
 import gameSource from "./game.ts?raw";
-import { FIELD_W, SHIBA_X } from "./game";
+import { FIELD_H, FIELD_W, LANE_Y, SHIBA_X } from "./game";
 import htmlSource from "../index.html?raw";
 import mainSource from "./main.ts?raw";
 import paletteSource from "./palette.ts?raw";
 import { OUTLINE, PALETTE } from "./palette";
 import pixelsSource from "./pixels.ts?raw";
-import { PIXEL_H, PIXEL_W, flipH, rotateQuarter, toPx, type Sprite } from "./pixels";
+import { flipH, rotateQuarter, setViewSize, viewX, viewY, type Sprite } from "./pixels";
 import sfxSource from "./sfx.ts?raw";
 import spritesSource from "./sprites.ts?raw";
 import {
@@ -107,13 +107,42 @@ describe("palette", () => {
 });
 
 describe("pixel grid", () => {
-  it("uses a 195×422 buffer and presents 390×844 at 2×", () => {
-    expect(PIXEL_W).toBe(195);
-    expect(PIXEL_H).toBe(422);
-    expect(toPx(SHIBA_X)).toBe(97);
-    expect(toPx(0)).toBe(0);
-    expect(toPx(FIELD_W - 1)).toBe(194);
-    expect(layoutPlayfield(390, 844)).toEqual({ scale: 2, x: 0, y: 0 });
+  it("covers the viewport with an integer full-bleed buffer", () => {
+    const phone = layoutPlayfield(390, 844);
+    expect(phone).toEqual({ scale: 2, width: 195, height: 422, x: 0, y: 0 });
+    expect(phone.width * phone.scale).toBe(390);
+    expect(phone.height * phone.scale).toBe(844);
+
+    const tall = layoutPlayfield(430, 932);
+    expect(tall).toEqual({ scale: 2, width: 215, height: 466, x: 0, y: 0 });
+    expect(tall.width * tall.scale).toBe(430);
+    expect(tall.height * tall.scale).toBe(932);
+
+    const odd = layoutPlayfield(391, 845);
+    expect(odd.scale).toBeGreaterThanOrEqual(2);
+    expect(Number.isInteger(odd.scale)).toBe(true);
+    expect(Number.isInteger(odd.width)).toBe(true);
+    expect(Number.isInteger(odd.height)).toBe(true);
+    expect(odd.x).toBe(0);
+    expect(odd.y).toBe(0);
+    expect(odd.width * odd.scale).toBeGreaterThanOrEqual(391);
+    expect(odd.height * odd.scale).toBeGreaterThanOrEqual(845);
+    expect(odd.width * odd.scale - 391).toBeLessThan(odd.scale);
+    expect(odd.height * odd.scale - 845).toBeLessThan(odd.scale);
+
+    setViewSize(phone.width, phone.height);
+    expect(viewX(SHIBA_X)).toBe(97);
+    expect(viewX(0)).toBe(0);
+    expect(viewX(FIELD_W - 1)).toBe(194);
+    expect(viewY(LANE_Y)).toBe(256);
+    setViewSize(tall.width, tall.height);
+    expect(viewX(0)).toBe(0);
+    expect(viewY(0)).toBe(0);
+    expect(viewX(FIELD_W)).toBe(tall.width);
+    expect(viewY(FIELD_H)).toBe(tall.height);
+    expect(Number.isInteger(viewX(SHIBA_X))).toBe(true);
+    expect(Number.isInteger(viewY(LANE_Y))).toBe(true);
+    setViewSize(195, 422);
   });
 
   it("sizes shiba, cats, boss, and the damage font on whole pixels", () => {
