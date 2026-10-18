@@ -124,6 +124,34 @@ class Controls {
 
 const controls = new Controls(canvas, () => sfx.unlock());
 
+function blockBrowserGestures(): void {
+  const stop = (event: Event): void => {
+    event.preventDefault();
+  };
+  const names: readonly string[] = [
+    "dblclick",
+    "gesturestart",
+    "gesturechange",
+    "gestureend",
+    "selectstart",
+    "contextmenu",
+  ];
+  for (const name of names) window.addEventListener(name, stop, { passive: false });
+  document.addEventListener("touchmove", stop, { passive: false });
+  let lastTouchEnd = 0;
+  document.addEventListener(
+    "touchend",
+    (event) => {
+      const now = performance.now();
+      if (now - lastTouchEnd < 300) event.preventDefault();
+      lastTouchEnd = now;
+    },
+    { passive: false },
+  );
+}
+
+blockBrowserGestures();
+
 function viewportBox(): { width: number; height: number; left: number; top: number } {
   const viewport = window.visualViewport;
   if (!viewport) {
