@@ -12,18 +12,20 @@ import { flipH, rotateQuarter, setViewSize, viewX, viewY, type Sprite } from "./
 import sfxSource from "./sfx.ts?raw";
 import spritesSource from "./sprites.ts?raw";
 import {
-  bossCat,
+  bulldog,
+  chihuahua,
+  dachshund,
   everySprite,
   font,
   fontPop,
   glove,
-  largeCat,
+  mastiff,
   outlinedSprites,
   shibaIdle,
   skyBands,
   skyline,
-  smallCat,
   sparkGolds,
+  stBernard,
 } from "./sprites";
 
 const ALLOWED = new Set(PALETTE.map((color) => color.toLowerCase()));
@@ -145,11 +147,16 @@ describe("pixel grid", () => {
     setViewSize(195, 422);
   });
 
-  it("sizes shiba, cats, boss, and the damage font on whole pixels", () => {
+  it("sizes shiba, dogs, and the damage font on whole pixels", () => {
     for (const picture of shibaIdle) expect(picture).toMatchObject({ w: 48, h: 48 });
-    for (const picture of smallCat) expect(picture).toMatchObject({ w: 32, h: 32 });
-    for (const picture of largeCat) expect(picture).toMatchObject({ w: 48, h: 48 });
-    for (const picture of bossCat) expect(picture).toMatchObject({ w: 80, h: 80 });
+    for (const breed of [chihuahua, dachshund, bulldog]) {
+      expect(breed).toHaveLength(4);
+      for (const picture of breed) expect(picture).toMatchObject({ w: 32, h: 32 });
+    }
+    expect(stBernard).toHaveLength(4);
+    for (const picture of stBernard) expect(picture).toMatchObject({ w: 48, h: 48 });
+    expect(mastiff).toHaveLength(4);
+    for (const picture of mastiff) expect(picture).toMatchObject({ w: 80, h: 80 });
     for (const picture of Object.values(font)) expect(picture).toMatchObject({ w: 8, h: 10 });
     for (const picture of Object.values(fontPop)) expect(picture).toMatchObject({ w: 12, h: 15 });
   });

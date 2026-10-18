@@ -188,7 +188,7 @@ describe("chain collisions", () => {
   it("lets one super punch blow away a connected line", () => {
     const { state } = resumed();
     state.spawnTimer = 999;
-    const cats = [0, 1, 2, 3].map((index) =>
+    const dogs = [0, 1, 2, 3].map((index) =>
       spawnEnemy(state, {
         kind: "small",
         side: "right",
@@ -198,9 +198,9 @@ describe("chain collisions", () => {
       }),
     );
     step(state, SUPER_HOLD, { left: false, right: true, tap: false });
-    for (const cat of cats) {
-      expect(cat.phase).toBe("blown");
-      expect(cat.hp).toBeLessThanOrEqual(0);
+    for (const dog of dogs) {
+      expect(dog.phase).toBe("blown");
+      expect(dog.hp).toBeLessThanOrEqual(0);
     }
   });
 });
@@ -350,7 +350,7 @@ describe("saved records", () => {
 });
 
 describe("first-run hint", () => {
-  it("puts one cat on the right until that side is punched, then remembers", () => {
+  it("puts one dog on the right until that side is punched, then remembers", () => {
     const storage = createMemoryStorage();
     const state = createGame(storage);
     expect(loadProgress(storage).seenIntro).toBe(false);

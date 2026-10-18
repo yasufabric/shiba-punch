@@ -23,14 +23,16 @@ import {
 } from "./pixels";
 import {
   arm,
-  bossCat,
+  bulldog,
+  chihuahua,
+  dachshund,
   dash,
   finger,
   font,
   fontPop,
   glove,
   gloveWin,
-  largeCat,
+  mastiff,
   moon,
   pawOff,
   pawOn,
@@ -42,8 +44,8 @@ import {
   skyBands,
   skyStars,
   skyline,
-  smallCat,
   sparkGolds,
+  stBernard,
   star,
 } from "./sprites";
 
@@ -118,14 +120,16 @@ function place(picture: Sprite, cx: number, cy: number): { x: number; y: number 
   };
 }
 
-function framesFor(kind: EnemyKind): readonly Sprite[] {
+const SMALL_DOGS: readonly (readonly Sprite[])[] = [chihuahua, dachshund, bulldog];
+
+function framesFor(kind: EnemyKind, id: number): readonly Sprite[] {
   switch (kind) {
     case "small":
-      return smallCat;
+      return SMALL_DOGS[id % SMALL_DOGS.length] ?? chihuahua;
     case "large":
-      return largeCat;
+      return stBernard;
     case "boss":
-      return bossCat;
+      return mastiff;
     default: {
       const neverKind: never = kind;
       return neverKind;
@@ -240,11 +244,11 @@ function drawShadowAt(ctx: CanvasRenderingContext2D, picture: Sprite, cx: number
 }
 
 function enemyPicture(enemy: Enemy, anim: number): Sprite {
-  const frames = framesFor(enemy.kind);
+  const frames = framesFor(enemy.kind, enemy.id);
   const walking = enemy.phase === "approach";
   const frame = walking ? Math.floor(anim * 12) % 4 : Math.floor(anim * 4) % 2;
-  let picture = frames[enemy.phase === "blown" ? 0 : frame] ?? frames[0] ?? smallCat[0];
-  if (!picture) return smallCat[0] ?? glove;
+  let picture = frames[enemy.phase === "blown" ? 0 : frame] ?? frames[0] ?? chihuahua[0];
+  if (!picture) return chihuahua[0] ?? glove;
   if (enemy.side === "left") picture = flipH(picture);
   if (enemy.phase === "blown") picture = rotateQuarter(picture, quarterOf(enemy.spin));
   return picture;
