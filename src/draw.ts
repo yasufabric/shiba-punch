@@ -44,6 +44,7 @@ import {
   skyBands,
   skyStars,
   skyline,
+  windows,
   sparkGolds,
   stBernard,
   star,
@@ -229,13 +230,22 @@ function drawBackground(ctx: CanvasRenderingContext2D, anim: number): void {
     const y1 = spanY(block.y + block.h);
     fillAt(ctx, x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0), block.color);
   }
+  for (const pane of windows) {
+    fillAt(ctx, spanX(pane.x), spanY(pane.y), pane.w, pane.h, 21);
+  }
   blit(ctx, moon, spanX(14), spanY(16), PLAIN);
   const twinkle = Math.floor(anim * 4);
   skyStars.forEach((starBit, index) => {
     const dim = (index + twinkle) % 5 === 0;
-    const gold = sparkGolds[(index + twinkle) % sparkGolds.length] ?? 13;
-    fillAt(ctx, spanX(starBit.x), spanY(starBit.y), starBit.s, starBit.s, dim ? 21 : gold);
+    fillAt(ctx, spanX(starBit.x), spanY(starBit.y), starBit.s, starBit.s, dim ? 20 : 21);
   });
+  const pathY = spanY(300);
+  fillAt(ctx, 0, pathY, width, 2, 19);
+  fillAt(ctx, 0, pathY + 8, width, 1, 20);
+  for (let x = 0; x < width; x += 7) {
+    fillAt(ctx, x, pathY + 4, 2, 1, 18);
+    fillAt(ctx, x + 3, pathY + 12, 1, 1, 19);
+  }
 }
 
 function drawShadowAt(ctx: CanvasRenderingContext2D, picture: Sprite, cx: number): void {
