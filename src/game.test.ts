@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   BURST_COUNT,
   FIELD_W,
+  GAUGE_MAX,
   LANE_Y,
   PLAYER_HP,
   RUN_LENGTH,
   SHIBA_X,
+  SHIBA_Y,
+  SPECIAL_REACH,
   STORAGE_KEY,
   SUPER_HOLD,
   WAVE_BOSS_AT,
@@ -373,5 +376,241 @@ describe("first-run hint", () => {
     const next = createGame(storage);
     expect(next.intro).toBe(false);
     expect(next.enemies).toHaveLength(0);
+  });
+});
+
+function aimTap(state: GameState, angle: number): void {
+  step(state, 1 / 60, { left: false, right: false, tap: true, aim: angle });
+  step(state, 1 / 60, idle);
+}
+
+function play(state: GameState, seconds: number, input: FrameInput = idle): void {
+  let left = seconds;
+  while (left > 0) {
+    const dt = Math.min(1 / 60, left);
+    step(state, dt, input);
+    left -= dt;
+  }
+}
+
+describe("directions", () => {
+  it("punches the enemy under the finger, including above and on a diagonal", () => {
+    const { state } = resumed();
+    state.spawnTimer = 999;
+    const above = spawnEnemy(state, {
+      kind: "small",
+      side: "right",
+      x: SHIBA_X,
+      y: SHIBA_Y - 110,
+      speed: 0,
+      attackRange: 0,
+    });
+    const right = spawnEnemy(state, {
+      kind: "small",
+      side: "right",
+      x: SHIBA_X + 110,
+      y: SHIBA_Y,
+      speed: 0,
+      attackRange: 0,
+    });
+    aimTap(state, -Math.PI / 2);
+    expect(above.phase).toBe("blown");
+    expect(right.phase).toBe("approach");
+
+    const angle = (Math.PI * 3) / 4;
+    const diagonal = spawnEnemy(state, {
+      kind: "small",
+      side: "left",
+      x: SHIBA_X + Math.cos(angle) * 120,
+      y: SHIBA_Y + Math.sin(angle) * 120,
+      speed: 0,
+      attackRange: 0,
+    });
+    aimTap(state, angle);
+    expect(diagonal.phase).toBe("blown");
+    expect(right.phase).toBe("approach");
+  });
+
+  it("spawns a burst on a ray that is not the side lanes", () => {
+    const { state } = resumed();
+    state.time = 20;
+    state.spawnTimer = 0.01;
+    state.burstIndex = 2;
+    step(state, 0.02, idle);
+    expect(state.enemies).toHaveLength(BURST_COUNT);
+    expect(state.enemies.every((enemy) => enemy.y > SHIBA_Y)).toBe(true);
+    expect(state.enemies.map((enemy) => enemy.behavior)).toEqual(["fast", "feint", "shield", "feint", "fast"]);
+  });
+});
+
+describe("enemy habits", () => {
+  it("sends a fast dog in ahead of a plain one", () => {
+    const { state } = resumed();
+    state.spawnTimer = 999;
+    const plain = spawnEnemy(state, {
+      kind: "small",
+      side: "right",
+      x: SHIBA_X + 280,
+      y: SHIBA_Y,
+      behavior: "plain",
+      attackRange: 0,
+    });
+    const fast = spawnEnemy(state, {
+      kind: "small",
+      side: "right",
+      x: SHIBA_X + 280,
+      y: SHIBA_Y - 40,
+      behavior: "fast",
+      attackRange: 0,
+    });
+    step(state, 0.35, idle);
+    const plainDist = Math.hypot(plain.x - SHIBA_X, plain.y - SHIBA_Y);
+    const fastDist = Math.hypot(fast.x - SHIBA_X, fast.y - SHIBA_Y);
+    expect(fastDist).toBeLessThan(plainDist - 15);
+  });
+
+  it("backs a feinting dog up once, then lets it come in again", () => {
+    const { state } = resumed();
+    state.spawnTimer = 999;
+    const dog = spawnEnemy(state, {
+      kind: "small",
+      side: "right",
+      x: SHIBA_X + 160,
+      y: SHIBA_Y,
+      behavior: "feint",
+    });
+    const start = dog.x;
+    play(state, 0.5);
+    expect(dog.feinted).toBe(true);
+    expect(dog.x).toBeGreaterThan(start);
+    const backed = dog.x;
+    play(state, 0.35);
+    expect(dog.x).toBeLessThan(backed);
+  });
+
+  it("lets a thrower fire one shot that reaches the shiba", () => {
+    const { state } = resumed();
+    state.spawnTimer = 999;
+    const dog = spawnEnemy(state, {
+      kind: "large",
+      side: "right",
+      x: SHIBA_X + 160,
+      y: SHIBA_Y,
+      behavior: "throw",
+      speed: 0,
+    });
+    step(state, 1 / 60, idle);
+    expect(dog.thrown).toBe(true);
+    expect(state.shots).toHaveLength(1);
+    const shotX = state.shots[0]?.x ?? 0;
+    step(state, 0.2, idle);
+    expect(state.shots[0]?.x ?? shotX).toBeLessThan(shotX);
+    step(state, 0.2, idle);
+    expect(state.shots).toHaveLength(1);
+    let guard = 0;
+    while (state.hp === PLAYER_HP && guard < 40) {
+      step(state, 0.05, idle);
+      guard += 1;
+    }
+    expect(state.hp).toBe(PLAYER_HP - 1);
+  });
+
+  it("ignores a frontal punch on a shield and still takes a chain", () => {
+    const { state } = resumed();
+    state.spawnTimer = 999;
+    const shield = spawnEnemy(state, {
+      kind: "small",
+      side: "right",
+      x: SHIBA_X + 90,
+      y: SHIBA_Y,
+      hp: 80,
+      behavior: "shield",
+      speed: 0,
+      attackRange: 0,
+    });
+    tap(state, "right");
+    expect(shield.hp).toBe(80);
+    expect(state.events.some((event) => event.type === "clink")).toBe(true);
+    step(state, SUPER_HOLD, { left: false, right: true, tap: false });
+    expect(shield.hp).toBe(80);
+
+    const flyer = spawnEnemy(state, {
+      kind: "small",
+      side: "right",
+      x: shield.x + 30,
+      y: SHIBA_Y,
+      hp: 1,
+      speed: 0,
+      attackRange: 0,
+    });
+    flyer.phase = "blown";
+    flyer.chainArmed = true;
+    flyer.vx = 0;
+    flyer.vy = 0;
+    step(state, 1 / 60, idle);
+    expect(shield.hp).toBeLessThan(80);
+  });
+});
+
+describe("all-direction blast", () => {
+  it("fills from landed punches, then spends the gauge on every dog in reach", () => {
+    const { state } = resumed();
+    state.spawnTimer = 999;
+    const bag = spawnEnemy(state, {
+      kind: "small",
+      side: "right",
+      x: SHIBA_X + 80,
+      y: SHIBA_Y,
+      hp: 5000,
+      speed: 0,
+      attackRange: 0,
+    });
+    for (let i = 0; i < GAUGE_MAX; i++) tap(state, "right");
+    expect(state.gauge).toBe(GAUGE_MAX);
+    tap(state, "right");
+    expect(state.gauge).toBe(GAUGE_MAX);
+
+    const pack = [0, 1, 2, 3].map((index) => {
+      const angle = (Math.PI / 2) * index + 0.4;
+      return spawnEnemy(state, {
+        kind: index === 2 ? "large" : "small",
+        side: Math.cos(angle) < 0 ? "left" : "right",
+        x: SHIBA_X + Math.cos(angle) * 140,
+        y: SHIBA_Y + Math.sin(angle) * 140,
+        behavior: index === 1 ? "shield" : "plain",
+        hp: index === 2 ? 40 : 30,
+        speed: 0,
+        attackRange: 0,
+      });
+    });
+    const far = spawnEnemy(state, {
+      kind: "small",
+      side: "right",
+      x: SHIBA_X + SPECIAL_REACH + 40,
+      y: SHIBA_Y,
+      hp: 30,
+      speed: 0,
+      attackRange: 0,
+    });
+    state.shots.push({ x: SHIBA_X + 40, y: SHIBA_Y, vx: -20, vy: 0, life: 1 });
+    step(state, 1 / 60, { left: false, right: false, tap: true, special: true });
+    expect(state.gauge).toBe(0);
+    expect(state.blastT).toBeGreaterThan(0);
+    expect(state.shots).toHaveLength(0);
+    for (const dog of pack) expect(dog.phase).toBe("blown");
+    expect(far.phase).toBe("approach");
+    expect(bag.hp).toBeLessThan(5000);
+    step(state, 1 / 60, { left: false, right: false, tap: true, special: true });
+    expect(state.gauge).toBe(0);
+  });
+
+  it("knocks a shot out of the punched cone", () => {
+    const { state } = resumed();
+    state.spawnTimer = 999;
+    state.shots.push({ x: SHIBA_X + 80, y: SHIBA_Y, vx: -40, vy: 0, life: 1 });
+    state.shots.push({ x: SHIBA_X, y: SHIBA_Y - 80, vx: 0, vy: 40, life: 1 });
+    tap(state, "right");
+    expect(state.shots).toHaveLength(1);
+    expect(state.shots[0]?.y).toBeLessThan(SHIBA_Y);
   });
 });

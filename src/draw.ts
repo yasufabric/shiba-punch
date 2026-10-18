@@ -1,9 +1,12 @@
 import {
+  GAUGE_MAX,
   LANE_Y,
   PLAYER_HP,
   RUN_LENGTH,
   SHIBA_X,
+  SHIBA_Y,
   WAVE_BOSS_AT,
+  wrapAngle,
   type Enemy,
   type EnemyKind,
   type GameState,
@@ -253,24 +256,46 @@ function drawShadowAt(ctx: CanvasRenderingContext2D, picture: Sprite, cx: number
   blit(ctx, picture, cx - Math.floor(picture.w / 2), foot - Math.floor(picture.h / 2), PLAIN);
 }
 
+function facePicture(picture: Sprite, dx: number, dy: number): Sprite {
+  if (Math.abs(dx) >= Math.abs(dy)) return dx > 0 ? flipH(picture) : picture;
+  return rotateQuarter(picture, dy > 0 ? 3 : 1);
+}
+
 function enemyPicture(enemy: Enemy, anim: number): Sprite {
   const frames = framesFor(enemy.kind, enemy.id);
   const walking = enemy.phase === "approach";
   const frame = walking ? Math.floor(anim * 12) % 4 : Math.floor(anim * 4) % 2;
   let picture = frames[enemy.phase === "blown" ? 0 : frame] ?? frames[0] ?? chihuahua[0];
   if (!picture) return chihuahua[0] ?? glove;
-  if (enemy.side === "left") picture = flipH(picture);
-  if (enemy.phase === "blown") picture = rotateQuarter(picture, quarterOf(enemy.spin));
-  return picture;
+  if (enemy.phase === "blown") return rotateQuarter(picture, quarterOf(enemy.spin));
+  return facePicture(picture, SHIBA_X - enemy.x, SHIBA_Y - enemy.y);
+}
+
+function drawShield(ctx: CanvasRenderingContext2D, enemy: Enemy, cx: number, cy: number): void {
+  if (enemy.behavior !== "shield" || enemy.phase === "blown" || enemy.phase === "dead") return;
+  const dx = viewX(SHIBA_X) - cx;
+  const dy = viewY(SHIBA_Y) - cy;
+  const len = Math.hypot(dx, dy) || 1;
+  const x = cx + Math.round((dx / len) * 16) - 3;
+  const y = cy + Math.round((dy / len) * 12) - 6;
+  fillAt(ctx, x, y, 7, 11, OUTLINE);
+  fillAt(ctx, x + 1, y + 1, 5, 9, 9);
+  fillAt(ctx, x + 2, y + 2, 3, 3, 10);
+  fillAt(ctx, x + 1, y + 6, 5, 2, 8);
 }
 
 function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, state: GameState, shake: { x: number; y: number }): void {
   const telegraph = enemy.phase === "telegraph" && Math.floor(state.anim * 6) % 2 === 0;
-  const lunge = telegraph ? (enemy.side === "left" ? 1 : -1) : 0;
-  const cx = viewX(enemy.x) + shake.x + lunge;
-  const cy = viewY(enemy.y) + shake.y;
+  const dx = SHIBA_X - enemy.x;
+  const dy = SHIBA_Y - enemy.y;
+  const lungeX = telegraph ? (Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? 1 : -1) : 0) : 0;
+  const lungeY = telegraph ? (Math.abs(dy) > Math.abs(dx) ? (dy > 0 ? 1 : -1) : 0) : 0;
+  const cx = viewX(enemy.x) + shake.x + lungeX;
+  const cy = viewY(enemy.y) + shake.y + lungeY;
   if (enemy.phase !== "blown" || cy > viewY(LANE_Y) - 24) {
-    drawShadowAt(ctx, shadowFor(enemy.kind), cx);
+    const foot = enemy.phase === "blown" ? viewY(LANE_Y) + FOOT_DROP : cy + FOOT_DROP;
+    const shadow = shadowFor(enemy.kind);
+    blit(ctx, shadow, cx - Math.floor(shadow.w / 2), foot - Math.floor(shadow.h / 2), PLAIN);
   }
   const picture = enemyPicture(enemy, state.anim);
   const at = place(picture, cx, cy);
@@ -279,6 +304,7 @@ function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, state: GameState
     telegraph,
     gold: null,
   });
+  drawShield(ctx, enemy, cx, cy);
   if (enemy.flash > 0) {
     const starFrame = enemy.flash > 0.066 ? 0 : enemy.flash > 0.033 ? 1 : 2;
     const burst = star[starFrame] ?? star[0];
@@ -332,6 +358,98 @@ function drawGlove(
   });
 }
 
+function gloveFacing(angle: number): { flip: boolean; quarter: 0 | 1 | 2 | 3 } {
+  const quarter = ((Math.round(wrapAngle(angle) / (Math.PI / 2)) % 4) + 4) % 4;
+  switch (quarter) {
+    case 0:
+      return { flip: false, quarter: 0 };
+    case 1:
+      return { flip: false, quarter: 1 };
+    case 2:
+      return { flip: true, quarter: 0 };
+    case 3:
+      return { flip: false, quarter: 3 };
+    default:
+      return { flip: false, quarter: 0 };
+  }
+}
+
+function drawReach(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number): void {
+  const span = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+  const steps = Math.max(1, Math.floor(span / 4));
+  for (let i = 1; i < steps; i++) {
+    const x = Math.round(x0 + ((x1 - x0) * i) / steps);
+    const y = Math.round(y0 + ((y1 - y0) * i) / steps);
+    fillAt(ctx, x, y + 1, 2, 2, 1);
+    fillAt(ctx, x, y, 2, 2, 2);
+  }
+}
+
+function drawAimedGlove(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  cx: number,
+  cy: number,
+  phase: 0 | 1 | 2 | 3,
+): void {
+  const along = reachFor(phase, state.punchKind);
+  const reach = 22 + along;
+  const gx = cx + Math.round(Math.cos(state.punchAim) * reach);
+  const gy = cy + Math.round(Math.sin(state.punchAim) * reach) + (phase === 0 ? -3 : 0);
+  const facing = gloveFacing(state.punchAim);
+  let picture = facing.flip ? flipH(glove) : glove;
+  if (facing.quarter !== 0) picture = rotateQuarter(picture, facing.quarter);
+  if (along > 4) drawReach(ctx, cx, cy, gx, gy);
+  const left = gx - Math.floor(picture.w / 2);
+  const top = gy - Math.floor(picture.h / 2);
+  blit(ctx, picture, left, top, PLAIN);
+}
+
+function drawGauge(ctx: CanvasRenderingContext2D, state: GameState, cx: number, cy: number): void {
+  const ready = state.gauge >= GAUGE_MAX;
+  const blink = ready && Math.floor(state.anim * 8) % 2 === 0;
+  for (let i = 0; i < GAUGE_MAX; i++) {
+    const filled = i < state.gauge;
+    const angle = -Math.PI / 2 + (Math.PI * 2 * i) / GAUGE_MAX;
+    const radius = ready ? 34 : 32;
+    const x = cx + Math.round(Math.cos(angle) * radius) - 1;
+    const y = cy + Math.round(Math.sin(angle) * radius) - 8;
+    const size = filled || ready ? 3 : 2;
+    if (!filled && !ready) {
+      fillAt(ctx, x, y, 3, 3, OUTLINE);
+      fillAt(ctx, x, y, 2, 2, 21);
+      continue;
+    }
+    const color = blink ? 14 : filled ? 13 : 12;
+    fillAt(ctx, x, y, size, size, color);
+  }
+}
+
+function drawBlast(ctx: CanvasRenderingContext2D, state: GameState, shake: { x: number; y: number }): void {
+  if (state.blastT <= 0) return;
+  const progress = 1 - state.blastT / 0.32;
+  const dist = Math.round(10 + progress * 46);
+  const cx = viewX(SHIBA_X) + shake.x;
+  const cy = viewY(SHIBA_Y) + shake.y;
+  for (let i = 0; i < 8; i++) {
+    const angle = (Math.PI / 4) * i;
+    const x = cx + Math.round(Math.cos(angle) * dist);
+    const y = cy + Math.round(Math.sin(angle) * dist);
+    const size: 1 | 2 | 3 = i % 2 === 0 ? 3 : 2;
+    fillAt(ctx, x, y, size, size, i % 2 === 0 ? 14 : 13);
+    fillAt(ctx, x + size, y - size, 1, 1, 11);
+  }
+}
+
+function drawShots(ctx: CanvasRenderingContext2D, state: GameState, shake: { x: number; y: number }): void {
+  for (const shot of state.shots) {
+    const x = viewX(shot.x) + shake.x;
+    const y = viewY(shot.y) + shake.y;
+    fillAt(ctx, x, y, 3, 3, OUTLINE);
+    fillAt(ctx, x, y, 2, 2, 16);
+  }
+}
+
 function drawShiba(ctx: CanvasRenderingContext2D, state: GameState, shake: { x: number; y: number }): void {
   const phase = punchPhase(state);
   const idleFrame = Math.floor(state.anim * 4) % 2;
@@ -347,8 +465,10 @@ function drawShiba(ctx: CanvasRenderingContext2D, state: GameState, shake: { x: 
   drawShadowAt(ctx, shadowShiba, cx);
   const at = place(body, cx, cy);
   blit(ctx, body, at.x, at.y, { flash: showShibaFlash(state.hurtT), telegraph: false, gold: null });
-  drawGlove(ctx, state, "left", cx, cy + 2, phase);
-  drawGlove(ctx, state, "right", cx, cy + 2, phase);
+  drawGauge(ctx, state, cx, cy);
+  if (phase === null || state.punchSide !== "left") drawGlove(ctx, state, "left", cx, cy + 2, null);
+  if (phase === null || state.punchSide !== "right") drawGlove(ctx, state, "right", cx, cy + 2, null);
+  if (phase !== null) drawAimedGlove(ctx, state, cx, cy + 2, phase);
 }
 
 function drawDigits(ctx: CanvasRenderingContext2D, value: number, cx: number, cy: number, pop: boolean): void {
@@ -454,7 +574,9 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameState, insetT
   const grounded = state.enemies.filter((enemy) => enemy.phase !== "blown");
   const flying = state.enemies.filter((enemy) => enemy.phase === "blown");
   for (const enemy of grounded) drawEnemy(ctx, enemy, state, shake);
+  drawShots(ctx, state, shake);
   drawShiba(ctx, state, shake);
+  drawBlast(ctx, state, shake);
   for (const enemy of flying) drawEnemy(ctx, enemy, state, shake);
 
   state.sparks.forEach((spark, index) => {

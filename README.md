@@ -1,6 +1,6 @@
 # しばパンチ
 
-A three-minute portrait punching game. The shiba stays put. Dogs walk in from both sides. Tap to punch, hold for a super punch.
+A three-minute portrait punching game. The shiba stays in the center. Dogs come from every side. Tap or swipe toward one to punch, hold for a super punch, and tap the shiba when the gold ring is full to blast every direction.
 
 ```bash
 npm install

@@ -1,6 +1,6 @@
 # Shiba Punch (しばパンチ)
 
-Portrait phone game. One three-minute run. The shiba stands still and punches dogs that walk in from the left and right.
+Portrait phone game. One three-minute run. The shiba stands still in the center and punches dogs that come from every direction.
 
 ## Commands
 
@@ -25,7 +25,7 @@ Combat numbers, waves, punches, chains, HP, and records live in `src/game.ts`. R
 
 ## Rules worth preserving
 
-- Tap the side an enemy comes from. A press shorter than 1 second is a normal punch. Holding 1 second is a super punch.
+- Tap toward an enemy (the direction from the shiba to the finger) or swipe that way. A press shorter than 1 second is a normal punch. Holding 1 second is a super punch. Six landed punches fill a gold ring; tap the shiba, or put a second finger down, to spend it on an all-direction blast.
 - Combo multiplier: below 10 is 1×, 10 is 2×, 30 is 5×, linear between 10 and 30, then 5×.
 - Large enemies take no damage from normal punches. A super punch defeats them. Blown bodies pass damage into enemies they overlap.
 - Waves: 0–60s small dogs, 60–150s small plus large, 150–180s one boss. Time-up or HP 0 retries immediately. Beating the boss records a win.
