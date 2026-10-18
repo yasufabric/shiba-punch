@@ -2,6 +2,10 @@ export const FIELD_W = 390;
 export const FIELD_H = 844;
 export const SHIBA_X = 195;
 export const LANE_Y = 512;
+export const SHIBA_Y = LANE_Y;
+export const GAUGE_MAX = 6;
+export const AIM_CONE = Math.PI / 5;
+export const SPECIAL_REACH = 320;
 export const PLAYER_HP = 5;
 export const RUN_LENGTH = 180;
 export const WAVE_MIXED_AT = 60;
@@ -22,10 +26,11 @@ export const STORAGE_KEY = "shiba-punch";
 
 export type Side = "left" | "right";
 export type EnemyKind = "small" | "large" | "boss";
+export type Behavior = "plain" | "fast" | "feint" | "shield" | "throw" | "boss";
 export type EnemyPhase = "approach" | "telegraph" | "recover" | "blown" | "dead";
 export type Wave = "small" | "mixed" | "boss" | "done";
 export type PunchKind = "normal" | "super";
-export type HitSource = "normal" | "super" | "chain" | "super-chain";
+export type HitSource = "normal" | "super" | "chain" | "super-chain" | "blast";
 
 export interface Storage {
   getItem(key: string): string | null;
@@ -57,6 +62,10 @@ export interface Enemy {
   radius: number;
   attackRange: number;
   speed: number;
+  behavior: Behavior;
+  feint: number;
+  feinted: boolean;
+  thrown: boolean;
   chainArmed: boolean;
   hitIds: number[];
   flash: number;
@@ -91,10 +100,21 @@ export type GameEvent =
   | { type: "hurt" }
   | { type: "win" };
 
+export interface Shot {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+}
+
 export interface FrameInput {
   left: boolean;
   right: boolean;
   tap: boolean;
+  /** Radians, 0 = east, positive = downward. Held while the finger is down. */
+  aim?: number | null;
+  special?: boolean;
 }
 
 export interface GameState {
@@ -120,9 +140,17 @@ export interface GameState {
   beatT: number;
   invuln: number;
   punchSide: Side | null;
+  punchAim: number;
   punchKind: PunchKind;
   punchT: number;
   punchDur: number;
+  gauge: number;
+  blastT: number;
+  aim: number | null;
+  charge: number;
+  held: boolean;
+  latch: boolean;
+  shots: Shot[];
   chargeLeft: number;
   chargeRight: number;
   heldLeft: boolean;
@@ -248,9 +276,17 @@ function blankState(storage: Storage, progress: Progress): GameState {
     beatT: 0,
     invuln: 0,
     punchSide: null,
+    punchAim: 0,
     punchKind: "normal",
     punchT: 0,
     punchDur: 0.16,
+    gauge: 0,
+    blastT: 0,
+    aim: null,
+    charge: 0,
+    held: false,
+    latch: false,
+    shots: [],
     chargeLeft: 0,
     chargeRight: 0,
     heldLeft: false,
@@ -276,6 +312,7 @@ export interface SpawnSpec {
   attackRange?: number;
   phase?: EnemyPhase;
   intro?: boolean;
+  behavior?: Behavior;
 }
 
 export function spawnEnemy(state: GameState, spec: SpawnSpec): Enemy {
@@ -297,7 +334,11 @@ export function spawnEnemy(state: GameState, spec: SpawnSpec): Enemy {
     spinSpeed: 0,
     radius: stats.radius,
     attackRange: spec.attackRange ?? stats.attackRange,
-    speed: spec.speed ?? stats.speed,
+    speed: spec.speed ?? (spec.behavior === "fast" ? 156 : stats.speed),
+    behavior: spec.behavior ?? "plain",
+    feint: 0,
+    feinted: false,
+    thrown: false,
     chainArmed: false,
     hitIds: [],
     flash: 0,
@@ -330,22 +371,31 @@ function resetRun(state: GameState): void {
   state.storage = storage;
 }
 
+function away(enemy: Enemy): { x: number; y: number } {
+  const dx = enemy.x - SHIBA_X;
+  const dy = enemy.y - SHIBA_Y;
+  const len = Math.hypot(dx, dy) || 1;
+  return { x: dx / len, y: dy / len };
+}
+
 function blow(enemy: Enemy, mode: "pop" | "sweep", delay: number): void {
-  const dir: number = enemy.side === "left" ? -1 : 1;
+  const out = away(enemy);
+  const dir = out.x < 0 ? -1 : 1;
   enemy.phase = "blown";
   enemy.hp = Math.min(enemy.hp, 0);
   enemy.blowDelay = delay;
   enemy.spin = dir * (0.4 + (enemy.id % 5) * 0.35);
   if (mode === "sweep") {
-    const dist = Math.abs(enemy.x - SHIBA_X);
+    const dist = Math.hypot(enemy.x - SHIBA_X, enemy.y - SHIBA_Y);
     enemy.chainArmed = true;
-    enemy.vx = dir * (120 + Math.max(0, 70 - dist) * 0.25);
-    enemy.vy = -130 + (enemy.id % 5) * 64;
+    const speed = 120 + Math.max(0, 70 - dist) * 0.25;
+    enemy.vx = out.x * speed;
+    enemy.vy = out.y * speed - 80;
     enemy.spinSpeed = dir * 18;
   } else {
     enemy.chainArmed = false;
-    enemy.vx = dir * 70;
-    enemy.vy = -300;
+    enemy.vx = out.x * 70;
+    enemy.vy = out.y * 40 - 300;
     enemy.spinSpeed = dir * 13;
   }
 }
@@ -417,9 +467,21 @@ function beginWin(state: GameState): void {
   persist(state);
 }
 
+function frontalShield(enemy: Enemy): boolean {
+  if (enemy.behavior !== "shield") return false;
+  return true;
+}
+
 function applyHit(state: GameState, enemy: Enemy, source: HitSource): boolean {
   if (enemy.phase === "blown" || enemy.phase === "dead") return false;
-  const superHit = source === "super" || source === "super-chain";
+  const superHit = source === "super" || source === "super-chain" || source === "blast";
+  const blocked =
+    frontalShield(enemy) && source !== "blast" && source !== "chain" && source !== "super-chain";
+  if (blocked) {
+    enemy.flash = 0.09;
+    state.events.push({ type: "clink" });
+    return false;
+  }
   if (enemy.kind === "large" && !superHit) {
     enemy.flash = 0.09;
     state.events.push({ type: "clink" });
@@ -428,6 +490,7 @@ function applyHit(state: GameState, enemy: Enemy, source: HitSource): boolean {
 
   state.combo += 1;
   state.comboTimer = COMBO_WINDOW;
+  if ((source === "normal" || source === "super") && state.gauge < GAUGE_MAX) state.gauge += 1;
   noteBest(state);
   const damageKind = superHit ? "super" : source === "chain" ? "chain" : "normal";
   const damage = punchDamage(damageKind, state.combo);
@@ -450,28 +513,53 @@ function applyHit(state: GameState, enemy: Enemy, source: HitSource): boolean {
   } else if (enemy.kind === "boss" && superHit) {
     enemy.phase = "recover";
     enemy.recover = 0.55;
-    enemy.x += enemy.side === "left" ? -78 : 78;
+    const out = away(enemy);
+    enemy.x += out.x * 78;
+    enemy.y += out.y * 78;
   } else {
     enemy.phase = "recover";
     enemy.recover = 0.2;
-    enemy.x += enemy.side === "left" ? -26 : 26;
+    const out = away(enemy);
+    enemy.x += out.x * 26;
+    enemy.y += out.y * 26;
   }
   return true;
 }
 
-function onSide(enemy: Enemy, side: Side): boolean {
-  if (enemy.side !== side) return false;
-  if (enemy.phase === "blown" || enemy.phase === "dead") return false;
-  if (Math.abs(enemy.y - LANE_Y) > 96) return false;
-  return side === "left" ? enemy.x < SHIBA_X + 16 : enemy.x > SHIBA_X - 16;
+export function wrapAngle(angle: number): number {
+  const turn = Math.PI * 2;
+  let wrapped = angle % turn;
+  if (wrapped <= -Math.PI) wrapped += turn;
+  if (wrapped > Math.PI) wrapped -= turn;
+  return wrapped;
 }
 
-function nearestTarget(state: GameState, side: Side): Enemy | null {
+export function angleBetween(a: number, b: number): number {
+  return Math.abs(wrapAngle(a - b));
+}
+
+function heldAngle(input: FrameInput): number | null {
+  if (typeof input.aim === "number" && Number.isFinite(input.aim)) return input.aim;
+  if (input.right) return 0;
+  if (input.left) return Math.PI;
+  return null;
+}
+
+function inCone(enemy: Enemy, angle: number, reach: number): boolean {
+  if (enemy.phase === "blown" || enemy.phase === "dead") return false;
+  const dx = enemy.x - SHIBA_X;
+  const dy = enemy.y - SHIBA_Y;
+  const dist = Math.hypot(dx, dy);
+  if (dist > reach || dist < 6) return false;
+  return angleBetween(Math.atan2(dy, dx), angle) <= AIM_CONE;
+}
+
+function nearestInCone(state: GameState, angle: number): Enemy | null {
   let best: Enemy | null = null;
   let bestDist = PUNCH_REACH;
   for (const enemy of state.enemies) {
-    if (!onSide(enemy, side)) continue;
-    const dist = Math.abs(enemy.x - SHIBA_X);
+    if (!inCone(enemy, angle, PUNCH_REACH)) continue;
+    const dist = Math.hypot(enemy.x - SHIBA_X, enemy.y - SHIBA_Y);
     if (dist <= bestDist) {
       best = enemy;
       bestDist = dist;
@@ -480,39 +568,55 @@ function nearestTarget(state: GameState, side: Side): Enemy | null {
   return best;
 }
 
-function lineStart(state: GameState, side: Side): Enemy | null {
-  let best: Enemy | null = null;
-  let bestDist = Number.POSITIVE_INFINITY;
-  for (const enemy of state.enemies) {
-    if (!onSide(enemy, side)) continue;
-    if (enemy.x < -16 || enemy.x > FIELD_W + 16) continue;
-    const dist = Math.abs(enemy.x - SHIBA_X);
-    if (dist < bestDist) {
-      best = enemy;
-      bestDist = dist;
-    }
-  }
-  return best;
-}
-
-function applyPunch(state: GameState, side: Side, kind: PunchKind): void {
+function applyPunch(state: GameState, angle: number, kind: PunchKind): void {
   if (state.phase !== "play") return;
-  state.punchSide = side;
+  state.punchAim = angle;
+  state.punchSide = Math.cos(angle) < 0 ? "left" : "right";
   state.punchKind = kind;
   state.punchDur = kind === "super" ? 0.3 : 0.16;
   state.punchT = state.punchDur;
-  const target = kind === "super" ? lineStart(state, side) : nearestTarget(state, side);
+  const target = nearestInCone(state, angle);
   let connected = false;
   let beat = false;
   if (target && applyHit(state, target, kind)) {
     connected = true;
     if (state.combo > 0 && state.combo % 3 === 0) beat = true;
   }
+  state.shots = state.shots.filter((shot) => {
+    const dx = shot.x - SHIBA_X;
+    const dy = shot.y - SHIBA_Y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > PUNCH_REACH) return true;
+    if (angleBetween(Math.atan2(dy, dx), angle) > AIM_CONE) return true;
+    return false;
+  });
   if (kind === "super") {
     const chained = resolveChains(state);
     if (chained) connected = true;
   }
   state.events.push({ type: "punch", kind, connected, beat });
+}
+
+function applySpecial(state: GameState): void {
+  if (state.phase !== "play" || state.gauge < GAUGE_MAX) return;
+  state.gauge = 0;
+  state.blastT = 0.32;
+  state.punchAim = 0;
+  state.punchSide = null;
+  state.punchKind = "super";
+  state.punchDur = 0.3;
+  state.punchT = 0.3;
+  state.shake = Math.max(state.shake, 18);
+  state.flashT = Math.max(state.flashT, 0.08);
+  let connected = false;
+  for (const enemy of state.enemies) {
+    if (Math.hypot(enemy.x - SHIBA_X, enemy.y - SHIBA_Y) > SPECIAL_REACH) continue;
+    if (applyHit(state, enemy, "blast")) connected = true;
+  }
+  const chained = resolveChains(state);
+  if (chained) connected = true;
+  state.shots = [];
+  state.events.push({ type: "punch", kind: "super", connected, beat: connected });
 }
 
 function overlaps(a: Enemy, b: Enemy): boolean {
@@ -549,42 +653,59 @@ function resolveChains(state: GameState): boolean {
   return any;
 }
 
-function processSide(state: GameState, side: Side, down: boolean, dt: number): void {
-  const was = side === "left" ? state.heldLeft : state.heldRight;
-  if (side === "left") state.heldLeft = down;
-  else state.heldRight = down;
+function mirrorCharge(state: GameState): void {
+  const charging = state.held && !state.latch;
+  const left = charging && state.aim !== null && Math.cos(state.aim) < 0;
+  const right = charging && state.aim !== null && Math.cos(state.aim) >= 0;
+  state.heldLeft = left;
+  state.heldRight = right;
+  state.chargeLeft = left ? state.charge : 0;
+  state.chargeRight = right ? state.charge : 0;
+  state.latchLeft = left && state.latch;
+  state.latchRight = right && state.latch;
+}
 
-  const latched = side === "left" ? state.latchLeft : state.latchRight;
-  const setCharge = (value: number): void => {
-    if (side === "left") state.chargeLeft = value;
-    else state.chargeRight = value;
-  };
-  const setLatch = (value: boolean): void => {
-    if (side === "left") state.latchLeft = value;
-    else state.latchRight = value;
-  };
-
-  if (down) {
+function processAim(state: GameState, input: FrameInput, dt: number): void {
+  if (input.special) {
+    state.held = false;
+    state.charge = 0;
+    state.latch = false;
+    state.aim = null;
+    mirrorCharge(state);
+    applySpecial(state);
+    return;
+  }
+  const angle = heldAngle(input);
+  const down = angle !== null;
+  const was = state.held;
+  if (down && angle !== null) {
     if (!was) {
-      setCharge(0);
-      setLatch(false);
+      state.charge = 0;
+      state.latch = false;
     }
-    if (!(side === "left" ? state.latchLeft : state.latchRight)) {
-      const next = (side === "left" ? state.chargeLeft : state.chargeRight) + dt;
-      setCharge(next);
-      if (next >= SUPER_HOLD) {
-        setLatch(true);
-        applyPunch(state, side, "super");
+    state.held = true;
+    state.aim = angle;
+    if (!state.latch) {
+      state.charge += dt;
+      if (state.charge >= SUPER_HOLD) {
+        state.latch = true;
+        applyPunch(state, angle, "super");
       }
     }
-  } else if (was && !latched) {
-    setCharge(0);
-    setLatch(false);
-    applyPunch(state, side, "normal");
+  } else if (was && !state.latch) {
+    const punchAngle = state.aim ?? 0;
+    state.held = false;
+    state.charge = 0;
+    state.latch = false;
+    state.aim = null;
+    applyPunch(state, punchAngle, "normal");
   } else {
-    setCharge(0);
-    setLatch(false);
+    state.held = false;
+    state.charge = 0;
+    state.latch = false;
+    state.aim = null;
   }
+  mirrorCharge(state);
 }
 
 function hurtPlayer(state: GameState): boolean {
@@ -606,12 +727,32 @@ function hurtPlayer(state: GameState): boolean {
   return false;
 }
 
-function spawnBurst(state: GameState, side: Side, wave: "small" | "mixed"): void {
+function pointOnRay(dir: number, distance: number): { x: number; y: number } {
+  const angle = dir * (Math.PI / 4);
+  return {
+    x: SHIBA_X + Math.cos(angle) * distance,
+    y: SHIBA_Y + Math.sin(angle) * distance,
+  };
+}
+
+function smallBehavior(index: number): Behavior {
+  const order: readonly Behavior[] = ["fast", "feint", "shield", "feint", "fast"];
+  return order[index] ?? "fast";
+}
+
+function spawnBurst(state: GameState, dir: number, wave: "small" | "mixed"): void {
   for (let i = 0; i < BURST_COUNT; i++) {
     const kind: EnemyKind = wave === "mixed" && i === BURST_COUNT - 1 ? "large" : "small";
-    const x = side === "right" ? FIELD_W + 28 + i * BURST_SPACING : -28 - i * BURST_SPACING;
-    const enemy = spawnEnemy(state, { kind, side, x });
-    if (kind === "large") enemy.speed = kindStats("large").speed;
+    const at = pointOnRay(dir, 200 + i * BURST_SPACING);
+    const behavior: Behavior = kind === "large" ? "throw" : smallBehavior(i);
+    spawnEnemy(state, {
+      kind,
+      side: at.x >= SHIBA_X ? "right" : "left",
+      x: at.x,
+      y: at.y,
+      behavior,
+      speed: behavior === "fast" ? 156 : undefined,
+    });
   }
   state.burstIndex += 1;
 }
@@ -621,9 +762,15 @@ function spawnBoss(state: GameState): void {
     if (enemy.phase === "blown" || enemy.phase === "dead") continue;
     blow(enemy, "pop", 0);
   }
-  const side: Side = state.burstIndex % 2 === 0 ? "right" : "left";
-  const x = side === "right" ? FIELD_W + 70 : -70;
-  spawnEnemy(state, { kind: "boss", side, x });
+  const dir = state.burstIndex % 8;
+  const at = pointOnRay(dir, 250);
+  spawnEnemy(state, {
+    kind: "boss",
+    side: at.x >= SHIBA_X ? "right" : "left",
+    x: at.x,
+    y: at.y,
+    behavior: "boss",
+  });
   state.bossSpawned = true;
   state.shake = Math.max(state.shake, 12);
 }
@@ -633,12 +780,38 @@ function moveEnemies(state: GameState, dt: number): boolean {
     enemy.flash = Math.max(0, enemy.flash - dt);
     switch (enemy.phase) {
       case "approach": {
-        const dir: number = enemy.side === "left" ? 1 : -1;
-        enemy.x += dir * enemy.speed * dt;
-        if (enemy.attackRange > 0 && Math.abs(enemy.x - SHIBA_X) <= enemy.attackRange) {
-          enemy.x = SHIBA_X + (enemy.side === "left" ? -enemy.attackRange : enemy.attackRange);
+        const dx = SHIBA_X - enemy.x;
+        const dy = SHIBA_Y - enemy.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        let moving = enemy.behavior === "fast" ? Math.max(enemy.speed, 150) : enemy.speed;
+        if (enemy.behavior === "feint" && enemy.attackRange > 0) {
+          if (enemy.feint > 0) {
+            enemy.feint -= dt;
+            moving = -Math.max(70, enemy.speed);
+          } else if (!enemy.feinted && dist < 170) {
+            enemy.feint = 0.45;
+            enemy.feinted = true;
+          }
+        }
+        if (enemy.behavior === "throw" && enemy.attackRange > 0 && !enemy.thrown && dist < 180) {
+          enemy.thrown = true;
+          state.shots.push({
+            x: enemy.x,
+            y: enemy.y,
+            vx: (dx / dist) * 240,
+            vy: (dy / dist) * 240,
+            life: 1.6,
+          });
+        }
+        enemy.x += (dx / dist) * moving * dt;
+        enemy.y += (dy / dist) * moving * dt;
+        const next = Math.hypot(SHIBA_X - enemy.x, SHIBA_Y - enemy.y);
+        if (enemy.attackRange > 0 && enemy.feint <= 0 && next <= enemy.attackRange) {
+          const out = away(enemy);
+          enemy.x = SHIBA_X + out.x * enemy.attackRange;
+          enemy.y = SHIBA_Y + out.y * enemy.attackRange;
           enemy.phase = "telegraph";
-          enemy.telegraph = kindStats(enemy.kind).telegraph;
+          enemy.telegraph = enemy.behavior === "fast" ? 0.28 : kindStats(enemy.kind).telegraph;
         }
         break;
       }
@@ -694,6 +867,7 @@ function updateJuice(state: GameState, dt: number): void {
   state.flashT = Math.max(0, state.flashT - dt);
   state.beatT = Math.max(0, state.beatT - dt * 3.2);
   state.punchT = Math.max(0, state.punchT - dt);
+  state.blastT = Math.max(0, state.blastT - dt);
   state.gloveT += dt;
   if (state.invuln > 0) state.invuln = Math.max(0, state.invuln - dt);
   for (const floater of state.floaters) {
@@ -710,8 +884,28 @@ function updateJuice(state: GameState, dt: number): void {
   state.sparks = state.sparks.filter((spark) => spark.life > 0);
 }
 
+function moveShots(state: GameState, dt: number): boolean {
+  const next: Shot[] = [];
+  for (const shot of state.shots) {
+    shot.life -= dt;
+    shot.x += shot.vx * dt;
+    shot.y += shot.vy * dt;
+    if (shot.life <= 0) continue;
+    if (shot.x < -40 || shot.y < -40 || shot.x > FIELD_W + 40 || shot.y > FIELD_H + 40) continue;
+    const dist = Math.hypot(shot.x - SHIBA_X, shot.y - SHIBA_Y);
+    if (dist <= 28) {
+      if (hurtPlayer(state)) return true;
+      continue;
+    }
+    next.push(shot);
+  }
+  state.shots = next;
+  return false;
+}
+
 function simulate(state: GameState, dt: number): void {
   if (moveEnemies(state, dt)) return;
+  if (moveShots(state, dt)) return;
   if (state.phase !== "play") return;
   resolveChains(state);
   if (state.phase !== "play") return;
@@ -732,8 +926,8 @@ function simulate(state: GameState, dt: number): void {
     case "mixed":
       state.spawnTimer -= dt;
       if (state.spawnTimer <= 0) {
-        const side: Side = state.burstIndex % 2 === 0 ? "right" : "left";
-        spawnBurst(state, side, wave);
+        const dir = state.burstIndex % 8;
+        spawnBurst(state, dir, wave);
         state.spawnTimer = BURST_EVERY;
       }
       break;
@@ -760,12 +954,11 @@ export function step(state: GameState, dt: number, input: FrameInput = NO_INPUT)
     return;
   }
 
-  processSide(state, "left", input.left, dt);
+  processAim(state, input, dt);
   if (state.phase !== "play") {
     updateJuice(state, dt);
     return;
   }
-  processSide(state, "right", input.right, dt);
   updateJuice(state, dt);
   if (state.phase !== "play") return;
   if (state.hitStop > 0) {

@@ -3,12 +3,12 @@ import {
   FIELD_H,
   FIELD_W,
   SHIBA_X,
+  SHIBA_Y,
   SUPER_HOLD,
   createGame,
   step,
   type FrameInput,
   type GameState,
-  type Side,
   type Storage,
 } from "./game";
 import { setViewSize } from "./pixels";
@@ -51,74 +51,127 @@ declare global {
 
 if (import.meta.env.DEV) window.__SHIBA__ = state;
 
+/** Taps inside this radius of the shiba spend the gold ring. Outside it, the finger aims. */
+const SPECIAL_RADIUS = 70;
+
+interface TrackedPointer {
+  x: number;
+  y: number;
+  seen: boolean;
+  center: boolean;
+}
+
 class Controls {
-  private readonly pointers = new Map<number, { side: Side; seen: boolean }>();
+  private readonly pointers = new Map<number, TrackedPointer>();
   private tap = false;
-  private ghost: Side | null = null;
+  private ghost: { aim: number; center: boolean } | null = null;
   private releaseGhost = false;
+  private specialEdge = false;
 
   constructor(
     private readonly surface: HTMLCanvasElement,
     private readonly onPress: () => void,
   ) {
     surface.addEventListener("pointerdown", (event) => this.onDown(event), { passive: false });
+    surface.addEventListener("pointermove", (event) => this.onMove(event), { passive: false });
     surface.addEventListener("pointerup", (event) => this.onUp(event));
     surface.addEventListener("pointercancel", (event) => this.onUp(event));
     surface.addEventListener("contextmenu", (event) => event.preventDefault());
   }
 
-  private sideOf(event: PointerEvent): Side | null {
+  private pointOf(event: PointerEvent): { x: number; y: number } | null {
     const rect = this.surface.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
     const x = ((event.clientX - rect.left) / rect.width) * FIELD_W;
     const y = ((event.clientY - rect.top) / rect.height) * FIELD_H;
     if (x < 0 || y < 0 || x > FIELD_W || y > FIELD_H) return null;
-    return x < SHIBA_X ? "left" : "right";
+    return { x, y };
+  }
+
+  private aimOf(x: number, y: number): number {
+    return Math.atan2(y - SHIBA_Y, x - SHIBA_X);
+  }
+
+  private inRing(x: number, y: number): boolean {
+    const dx = x - SHIBA_X;
+    const dy = y - SHIBA_Y;
+    return dx * dx + dy * dy <= SPECIAL_RADIUS * SPECIAL_RADIUS;
   }
 
   private onDown(event: PointerEvent): void {
     event.preventDefault();
-    const side = this.sideOf(event);
-    if (!side) return;
+    const point = this.pointOf(event);
+    if (!point) return;
+    const center = this.inRing(point.x, point.y);
+    if (center || this.pointers.size >= 1) this.specialEdge = true;
     this.surface.setPointerCapture(event.pointerId);
-    this.pointers.set(event.pointerId, { side, seen: false });
+    this.pointers.set(event.pointerId, { x: point.x, y: point.y, seen: false, center });
     this.tap = true;
     this.onPress();
+  }
+
+  private onMove(event: PointerEvent): void {
+    const pointer = this.pointers.get(event.pointerId);
+    const point = this.pointOf(event);
+    if (!pointer || !point) return;
+    pointer.x = point.x;
+    pointer.y = point.y;
   }
 
   private onUp(event: PointerEvent): void {
     const pointer = this.pointers.get(event.pointerId);
     this.pointers.delete(event.pointerId);
-    if (pointer && !pointer.seen) this.ghost = pointer.side;
+    if (!pointer || pointer.seen) return;
+    this.ghost = { aim: this.aimOf(pointer.x, pointer.y), center: pointer.center };
   }
 
-  private held(side: Side): boolean {
+  private heldAim(): number | null {
     for (const pointer of this.pointers.values()) {
-      if (pointer.side === side) return true;
+      if (pointer.center) continue;
+      return this.aimOf(pointer.x, pointer.y);
     }
-    return false;
+    return null;
+  }
+
+  private aimInput(aim: number, tap: boolean): FrameInput {
+    return {
+      left: Math.cos(aim) < 0,
+      right: Math.cos(aim) >= 0,
+      tap,
+      aim,
+    };
   }
 
   sample(): FrameInput {
-    if (this.ghost) {
-      const side = this.ghost;
-      this.ghost = null;
-      this.releaseGhost = true;
+    if (this.specialEdge) {
+      this.specialEdge = false;
       this.tap = false;
-      return {
-        left: side === "left" || this.held("left"),
-        right: side === "right" || this.held("right"),
-        tap: true,
-      };
+      this.ghost = null;
+      this.releaseGhost = false;
+      for (const pointer of this.pointers.values()) pointer.seen = true;
+      return { left: false, right: false, tap: true, aim: null, special: true };
+    }
+    if (this.ghost) {
+      const ghost = this.ghost;
+      this.ghost = null;
+      this.tap = false;
+      if (ghost.center) return { left: false, right: false, tap: true, aim: null, special: true };
+      this.releaseGhost = true;
+      const held = this.heldAim();
+      return this.aimInput(held ?? ghost.aim, true);
     }
     if (this.releaseGhost) {
       this.releaseGhost = false;
-      return { left: this.held("left"), right: this.held("right"), tap: false };
+      const held = this.heldAim();
+      if (held === null) return { left: false, right: false, tap: false, aim: null };
+      return this.aimInput(held, false);
     }
     for (const pointer of this.pointers.values()) pointer.seen = true;
     const tap = this.tap;
     this.tap = false;
-    return { left: this.held("left"), right: this.held("right"), tap };
+    const aim = this.heldAim();
+    if (aim === null) return { left: false, right: false, tap, aim: null };
+    return this.aimInput(aim, tap);
   }
 }
 
